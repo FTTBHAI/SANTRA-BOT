@@ -13,39 +13,54 @@ except ImportError:
     raise SystemExit("Pillow is missing. Run:  pip install pillow")
 
 # ================= SETTINGS =================
-# Set DISCORD_TOKEN in your hosting environment. Never paste a bot token into shared code.
-TOKEN = os.getenv("MTU2NzYzOTY0OTQ5NTgxMDA3OA.GAIwrR.d283sOdnadlHqTtD98vYkKWtG18nbekY8LERok", "MTU2NzYzOTY0OTQ5NTgxMDA3OA.GAIwrR.d283sOdnadlHqTtD98vYkKWtG18nbekY8LERok").strip().strip('"').strip("'")
+TOKEN = os.getenv("MTU2NzYzOTY0OTQ5NTgxMDA3OA.GLIc3v.nf5GIyK3f2YagGm70NG_QXopdSiNgZSS_E34RY", "MTU2NzYzOTY0OTQ5NTgxMDA3OA.GLIc3v.nf5GIyK3f2YagGm70NG_QXopdSiNgZSS_E34RY").strip().strip('"').strip("'")
 
 PREFIX = "!"
 BRAND = "SUPREME SCRIMS"
-OWNER_ID = 1522148066281521176  # set this to the Discord user ID allowed to use admin / throne commands
-THRONE_ROLE = "THRONE CLAIMER"   # kept for role display; admin access is locked to OWNER_ID only
-BANNED_ROLE = "SCRIM BANNED"     # given to scrim-banned players
-GROUP_CAP = 21            # max teams per group
-MIN_TEAMS = 18            # minimum teams for a group to run
-START_GROUP_ID = 1        # first group number (shown as 01)
-START_TEAM_ID = 1         # first team number (shown as 01)
-SLOT_START = 3            # slotlist starts from slot 03
-LOCK_MINUTES = 20         # can't clear registration within this many minutes of M1 IDP
+OWNER_ID = 1522148066281521176
+THRONE_ROLE = "THRONE CLAIMER"
+BANNED_ROLE = "SCRIM BANNED"
+GROUP_CAP = 21
+MIN_TEAMS = 18
+START_GROUP_ID = 1
+START_TEAM_ID = 1
+SLOT_START = 3
+LOCK_MINUTES = 20
 IST = timezone(timedelta(hours=5, minutes=30))
-AUTO_PANEL_TIME = dtime(hour=10, minute=0, tzinfo=IST)   # daily registration panel time (10:00 AM IST)
+
+# IDP times: 7-9 PM → 07:22 / 08:02 / 08:42 PM
+#            9-11 PM → 09:22 / 10:02 / 10:42 PM
 WINDOWS = {
-    "A": {"label": "7-9 PM",  "role": "7-9 IDP",  "m1": (19, 14), "m2": (19, 54), "color": 0xFF6A00},
-    "B": {"label": "9-11 PM", "role": "9-11 IDP", "m1": (21, 14), "m2": (21, 54), "color": 0x9B59B6},
+    "A": {
+        "label": "7-9 PM",
+        "role": "7-9 IDP",
+        # m1 / m2 / m3 as (hour, minute) in 24h
+        "m1": (19, 22),
+        "m2": (20, 2),
+        "m3": (20, 42),
+        "color": 0xFF6A00,
+    },
+    "B": {
+        "label": "9-11 PM",
+        "role": "9-11 IDP",
+        "m1": (21, 22),
+        "m2": (22, 2),
+        "m3": (22, 42),
+        "color": 0x9B59B6,
+    },
 }
-# Scrim ban options (max 3 days, IDP leak = permanent)
+
+# CHANGE 1 ── Cross-registration: a player may hold ONE slot per window (A and B).
+# find_team() now scoped to a specific window key so we don't block the second slot.
+
 DURATIONS = {
     "1d":   ("1 Day", 86400),
     "2d":   ("2 Days", 172800),
     "3d":   ("3 Days (max)", 259200),
     "leak": ("IDP Leak — PERMANENT", None),
 }
-# Map rotation for each group (2 matches per group): M1 Erangel, M2 Rondo.
-# Both groups receive their own announcement 30 minutes before their M1 IDP time.
 MAP_ROTATION = ["Erangel", "Rondo"]
 MAP_REVEAL_MINUTES_BEFORE = 30
-# Optional: drop your own cinematic screenshots in a "maps" folder next to this script, named
-# erangel.jpg / miramar.jpg / rondo.jpg (png / webp also work). If missing, a cinematic banner is drawn automatically.
 MAPS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "maps")
 MAP_STYLE = {
     "Erangel": {"sky": ((12, 22, 38), (128, 158, 156)), "sun": (255, 218, 160),
@@ -59,6 +74,10 @@ MAP_STYLE = {
                 "accent": (255, 130, 190), "tag": "CITY & MOUNTAIN CLASH"},
 }
 DATA_FILE = "data.json"
+
+# CHANGE 4 ── IDP banner image URL (sent automatically on !setup)
+IDP_BANNER_URL = "https://cdn.discordapp.com/attachments/1453442713193152684/1497823623099060284/IMG_20260426_100811.jpg"
+
 # ============================================
 
 # ---------- storage ----------
@@ -76,18 +95,17 @@ def save():
 
 def G(guild_id):
     gd = DATA["guilds"].setdefault(str(guild_id), {})
-    gd.setdefault("channel", None)          # registration panel channel
-    gd.setdefault("message", None)          # registration panel message
-    gd.setdefault("slot_channel", None)     # public slotlist channel
-    gd.setdefault("slot_msgs", {})          # group id -> slotlist message id (public channel)
-    gd.setdefault("idp_channels", {})       # window key -> IDP channel id
+    gd.setdefault("channel", None)          # registration panel channel id (entered by admin)
+    gd.setdefault("message", None)          # registration panel message id
+    gd.setdefault("idp_channels", {})       # window key -> IDP channel id (entered by admin)
     gd.setdefault("idp_msgs", {})           # window key -> {group id -> message id}
-    gd.setdefault("map_announcements", {})  # date:window -> announcement timestamp (prevents duplicates)
+    gd.setdefault("summary_channel", None)  # channel for overall stats / team data
+    gd.setdefault("map_announcements", {})
     gd.setdefault("category", None)
-    gd.setdefault("setup_channels", [])     # channels created by !setup
+    gd.setdefault("setup_channels", [])
     gd.setdefault("throne_role", None)
     gd.setdefault("banned_role", None)
-    gd.setdefault("bans", {})               # user id -> {until, reason, by, at}
+    gd.setdefault("bans", {})
     gd.setdefault("open", True)
     gd.setdefault("roles", {})
     gd.setdefault("teams", [])
@@ -126,33 +144,42 @@ def fresh_groups(gd, date):
     gd["teams"] = []
     gd["groups"] = []
     gd["date"] = date
-    gd["next_gid"] = START_GROUP_ID      # group numbers restart from 01
-    gd["next_tid"] = START_TEAM_ID       # team numbers restart from 01
+    gd["next_gid"] = START_GROUP_ID
+    gd["next_tid"] = START_TEAM_ID
     for key in WINDOWS:
         new_group(gd, key)
 
-def find_team(gd, user_id):
-    return next((t for t in gd["teams"] if t["owner"] == user_id), None)
+# CHANGE 1 ── scoped to a specific window key so both A and B can be registered
+def find_team(gd, user_id, window_key=None):
+    """Return the team the user owns in the given window (or any window if key=None)."""
+    for t in gd["teams"]:
+        if t["owner"] == user_id:
+            if window_key is None or t["window"] == window_key:
+                return t
+    return None
 
 def fmt_time(h, m):
     ap = "AM" if h < 12 else "PM"
-    return f"{(h - 1) % 12 + 1:02d}:{m:02d}{ap}"
+    return f"{(h - 1) % 12 + 1:02d}:{m:02d} {ap}"
 
 def idp_text(key):
     w = WINDOWS[key]
-    return f"M1: `{fmt_time(*w['m1'])}` | M2: `{fmt_time(*w['m2'])}`"
+    return (
+        f"M1: `{fmt_time(*w['m1'])}` | "
+        f"M2: `{fmt_time(*w['m2'])}` | "
+        f"M3: `{fmt_time(*w['m3'])}`"
+    )
 
 def m1_dt(g):
     y, mo, d = map(int, g["date"].split("-"))
     h, m = WINDOWS[g["window"]]["m1"]
     return datetime(y, mo, d, h, m, tzinfo=IST)
 
-# ---------- throne (admin) permission ----------
+# ---------- throne permission ----------
 class NotThrone(commands.CheckFailure):
     pass
 
 def is_throne(member):
-    """True only for the configured OWNER_ID (bot owner)."""
     if member is None:
         return False
     return int(getattr(member, "id", 0)) == OWNER_ID
@@ -219,7 +246,6 @@ def make_slotlist_png(group, teams, is_open):
     cell_w = (W - 2 * M - (COLS - 1) * GAP) // COLS
     H = HEADER_H + ROWS * CELL_H + (ROWS - 1) * GAP + FOOTER_H
 
-    # gradient background
     base = Image.new("RGB", (W, H))
     bd = ImageDraw.Draw(base)
     top, bot = (10, 11, 24), (34, 14, 6)
@@ -228,7 +254,6 @@ def make_slotlist_png(group, teams, is_open):
         bd.line([(0, y), (W, y)], fill=tuple(int(top[i] + (bot[i] - top[i]) * t) for i in range(3)))
     img = base.convert("RGBA")
 
-    # glow
     glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     gdw = ImageDraw.Draw(glow)
     gdw.ellipse((W - 520, -260, W + 160, 320), fill=(255, 106, 0, 120))
@@ -241,7 +266,6 @@ def make_slotlist_png(group, teams, is_open):
     f_chip, f_cell, f_num = load_font(26), load_font(27), load_font(27)
     f_small = load_font(22, bold=False)
 
-    # header
     d.rectangle((0, 0, W, 8), fill=GOLD)
     ox, oy = M, 44
     d.polygon([(ox, oy + 42), (ox, oy + 8), (ox + 15, oy + 24), (ox + 30, oy), (ox + 45, oy + 24),
@@ -251,8 +275,11 @@ def make_slotlist_png(group, teams, is_open):
     d.text((M + 86, 112), f"SLOT LIST   |   GROUP {group['id']:02d}", font=f_sub, fill=(225, 225, 238, 255))
 
     w = WINDOWS[group["window"]]
-    chips = [f"DATE  {group['date']}", f"TIME  {w['label']}",
-             f"M1 {fmt_time(*w['m1'])}   M2 {fmt_time(*w['m2'])}"]
+    chips = [
+        f"DATE  {group['date']}",
+        f"TIME  {w['label']}",
+        f"M1 {fmt_time(*w['m1'])}  M2 {fmt_time(*w['m2'])}  M3 {fmt_time(*w['m3'])}",
+    ]
     cx = M
     for text in chips:
         tw = d.textlength(text, font=f_chip)
@@ -262,7 +289,6 @@ def make_slotlist_png(group, teams, is_open):
         cx += tw + 40 + 16
     d.line([(M, HEADER_H - 12), (W - M, HEADER_H - 12)], fill=(255, 196, 0, 120), width=2)
 
-    # slots (column-major so it reads like a list) — numbering starts from SLOT_START (03)
     for idx in range(GROUP_CAP):
         col, row = idx // ROWS, idx % ROWS
         x = M + col * (cell_w + GAP)
@@ -285,7 +311,6 @@ def make_slotlist_png(group, teams, is_open):
         max_w = cell_w - (bs + 24) - 28
         _ltext(d, bx + bs + 16, y + CELL_H / 2, _fit(d, name, f_cell, max_w), f_cell, color)
 
-    # footer
     fy = HEADER_H + ROWS * CELL_H + (ROWS - 1) * GAP + 30
     count = len(teams)
     _ltext(d, M, fy + 14, f"{count}/{GROUP_CAP} TEAMS REGISTERED", f_chip, (255, 255, 255, 255))
@@ -307,25 +332,24 @@ def make_slotlist_png(group, teams, is_open):
         d.rounded_rectangle((x0, fy, x_right, fy + 56), 28, fill=col[:3] + (45,), outline=col, width=2)
         _ctext(d, (x0 + x_right) / 2, fy + 28, txt, f_chip, col)
         x_right = x0 - 16
-    _ctext(d, W / 2, H - 26, "Play fair  •  Be on time  •  Submit SS after the 2nd match", f_small, (170, 172, 190, 255))
+    _ctext(d, W / 2, H - 26, "Play fair  •  Be on time  •  Submit SS after the last match", f_small, (170, 172, 190, 255))
 
     buf = io.BytesIO()
     img.convert("RGB").save(buf, "PNG")
     buf.seek(0)
     return buf
 
-# ---------- map rotation + cinematic shots ----------
+# ---------- map rotation + cinematic ----------
 def map_for(date_str, window_key, match_no):
-    """Fixed daily rotation for each group: M1 Erangel, M2 Rondo."""
     return MAP_ROTATION[match_no % len(MAP_ROTATION)]
 
 def match_dt(date_str, window_key, match_no):
     y, mo, d = map(int, date_str.split("-"))
-    h, m = WINDOWS[window_key]["m2" if match_no else "m1"]
+    key = ["m1", "m2", "m3"][match_no % 3]
+    h, m = WINDOWS[window_key][key]
     return datetime(y, mo, d, h, m, tzinfo=IST)
 
 def _spaced(d, x, cy, text, font, fill, spacing=6):
-    """Left-aligned, letter-spaced text (vertically centred on cy). Returns end x."""
     for ch in text:
         b = d.textbbox((0, 0), ch, font=font)
         d.text((x - b[0], cy - (b[3] - b[1]) / 2 - b[1]), ch, font=font, fill=fill)
@@ -359,13 +383,12 @@ def make_map_cinematic_png(map_name, match_no, window_key, date_str):
         except Exception:
             img = None
     if img is None:
-        # generated scene: sky gradient + sun + layered ridgelines + mist
         base = Image.new("RGB", (W, H))
         bd = ImageDraw.Draw(base)
-        top, bot = st["sky"]
+        top_c, bot_c = st["sky"]
         for y in range(H):
             t = min(1, y / (H * 0.78))
-            bd.line([(0, y), (W, y)], fill=tuple(int(top[i] + (bot[i] - top[i]) * t) for i in range(3)))
+            bd.line([(0, y), (W, y)], fill=tuple(int(top_c[i] + (bot_c[i] - top_c[i]) * t) for i in range(3)))
         img = base.convert("RGBA")
         glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         sx, sy = int(W * 0.74), int(H * 0.50)
@@ -388,14 +411,12 @@ def make_map_cinematic_png(map_name, match_no, window_key, date_str):
             ImageDraw.Draw(mist).rectangle((0, int(y0 - 10), W, int(y0 + 46)), fill=st["sky"][1] + (34,))
             img = Image.alpha_composite(img, mist.filter(ImageFilter.GaussianBlur(26)))
             d0 = ImageDraw.Draw(img, "RGBA")
-        # film grain (own layer so the alpha blends instead of replacing pixels)
         grain = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         gd_ = ImageDraw.Draw(grain)
         for _ in range(2600):
             gd_.point((rnd.randrange(W), rnd.randrange(H)), fill=(255, 255, 255, rnd.randrange(10, 28)))
         img = Image.alpha_composite(img, grain)
 
-    # dark gradient on the left for text + vignette
     shade = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     sd = ImageDraw.Draw(shade)
     for x in range(W):
@@ -406,7 +427,6 @@ def make_map_cinematic_png(map_name, match_no, window_key, date_str):
     img = Image.alpha_composite(img, vig.filter(ImageFilter.GaussianBlur(110)))
 
     d = ImageDraw.Draw(img, "RGBA")
-    # letterbox bars
     d.rectangle((0, 0, W, BAR), fill=(0, 0, 0, 255))
     d.rectangle((0, H - BAR, W, H), fill=(0, 0, 0, 255))
     d.line([(0, BAR), (W, BAR)], fill=acc, width=2)
@@ -414,7 +434,8 @@ def make_map_cinematic_png(map_name, match_no, window_key, date_str):
 
     f_big, f_tag, f_chip = load_font(128), load_font(28), load_font(30)
     f_bar = load_font(21)
-    t_start = fmt_time(*w["m2" if match_no else "m1"])
+    match_key = ["m1", "m2", "m3"][match_no % 3]
+    t_start = fmt_time(*w[match_key])
     _spaced(d, 48, BAR / 2 + 1, BRAND, f_bar, (255, 196, 0, 255), 4)
     right = f"MAP ROTATION REVEAL  |  {date_str}"
     _spaced(d, W - 48 - _spaced_w(d, right, f_bar, 3), BAR / 2 + 1, right, f_bar, (225, 225, 238, 255), 3)
@@ -422,10 +443,9 @@ def make_map_cinematic_png(map_name, match_no, window_key, date_str):
     mt = f"MATCH {match_no + 1}"
     _spaced(d, W - 48 - _spaced_w(d, mt, f_bar, 4), H - BAR / 2, mt, f_bar, acc, 4)
 
-    # tagline, big map name, chips
     _spaced(d, 64, 178, st["tag"], f_tag, acc, 7)
     name = map_name.upper()
-    _spaced(d, 66, 276, name, f_big, (0, 0, 0, 150), 10)       # shadow
+    _spaced(d, 66, 276, name, f_big, (0, 0, 0, 150), 10)
     _spaced(d, 62, 272, name, f_big, (255, 255, 255, 255), 10)
     chips = [f"M{match_no + 1}", f"{t_start} IST"]
     chip_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
@@ -452,7 +472,14 @@ def make_map_cinematic_png(map_name, match_no, window_key, date_str):
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
-bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
+
+# CHANGE 2 ── status set to offline (do_not_disturb renders as a red dot, invisible is truly offline)
+bot = commands.Bot(
+    command_prefix=PREFIX,
+    intents=intents,
+    help_command=None,
+    status=discord.Status.invisible,   # bot shows as OFFLINE
+)
 
 # ---------- panel ----------
 def status_icon(c):
@@ -474,21 +501,26 @@ def build_embeds(gd):
             f"🕒 **IDP:** {idp_text(g['window'])}\n"
             f"`{bar}` {c}/{GROUP_CAP} filled{ready}\n"
         )
-    slots = discord.Embed(title="REGISTRATION — Slot availability",
-                          description=("\n".join(lines) or "No groups yet.")[:4000],
-                          color=0xFF6A00)
-    slots.set_footer(text=("Registration OPEN ✅" if gd["open"] else "Registration CLOSED ❌")
-                          + " • Slots fill on first-come basis • Play fair and check in on time.")
-
+    slots = discord.Embed(
+        title="REGISTRATION — Slot availability",
+        description=("\n".join(lines) or "No groups yet.")[:4000],
+        color=0xFF6A00,
+    )
+    slots.set_footer(text=(
+        ("Registration OPEN ✅" if gd["open"] else "Registration CLOSED ❌")
+        + " • Slots fill on first-come basis • Play fair and check in on time."
+    ))
     info = discord.Embed(
         title="📥 Team Registration",
         description=(
             "Click the button below to register your team.\n\n"
             f"➤ Can't play? Use **Clear Registration** at least {LOCK_MINUTES} minutes before M1 IDP.\n"
-            "➤ SS submission is mandatory after the second match is completed.\n"
+            "➤ SS submission is mandatory after the last match is completed.\n"
             f"➤ A group needs at least **{MIN_TEAMS}** teams to run.\n"
+            "➤ You may register for **both** time windows (7-9 PM and 9-11 PM).\n"
             "➤ After registering you get a **DM** and access to your **IDP channel**."),
-        color=0x2B2D31)
+        color=0x2B2D31,
+    )
     return [slots, info]
 
 async def refresh_panel(guild):
@@ -504,8 +536,8 @@ async def refresh_panel(guild):
 
 _locks = {}
 
-async def _sync_channel(ch, msgs, groups, images):
-    """Make sure `ch` has exactly one up-to-date slotlist message per group in `groups`."""
+async def _sync_idp_channel(ch, msgs, groups, images):
+    """Keep IDP channel slotlists in sync (no separate slotlist channel)."""
     live = {str(g["id"]) for g in groups}
     for gid in list(msgs):
         if gid not in live:
@@ -531,12 +563,11 @@ async def _sync_channel(ch, msgs, groups, images):
             msg = await ch.send(content=content, file=file)
             msgs[str(g["id"])] = msg.id
 
+# CHANGE 5 ── slotlist goes into the IDP channel only (no separate slotlist channel)
 async def refresh_slotlists(guild):
-    """Regenerates the slotlist PNGs; updates the public slotlist channel AND the IDP channels."""
     gd = G(guild.id)
-    pub = guild.get_channel(gd.get("slot_channel") or 0)
-    idp = {k: guild.get_channel(v) for k, v in gd.get("idp_channels", {}).items()}
-    if not pub and not any(idp.values()):
+    idp_chs = {k: guild.get_channel(v) for k, v in gd.get("idp_channels", {}).items() if v}
+    if not any(idp_chs.values()):
         return
     async with _locks.setdefault(guild.id, asyncio.Lock()):
         try:
@@ -546,12 +577,11 @@ async def refresh_slotlists(guild):
                 names = [t["name"] for t in gd["teams"] if t["group"] == g["id"]]
                 buf = await asyncio.to_thread(make_slotlist_png, g, names, gd["open"])
                 images[g["id"]] = buf.getvalue()
-            if pub:
-                await _sync_channel(pub, gd["slot_msgs"], groups, images)
-            for key, ch in idp.items():
+            for key, ch in idp_chs.items():
                 if ch:
                     msgs = gd["idp_msgs"].setdefault(key, {})
-                    await _sync_channel(ch, msgs, [g for g in groups if g["window"] == key], images)
+                    window_groups = [g for g in groups if g["window"] == key]
+                    await _sync_idp_channel(ch, msgs, window_groups, images)
             save()
         except Exception as e:
             print("slotlist refresh failed:", e)
@@ -559,6 +589,50 @@ async def refresh_slotlists(guild):
 async def refresh_all(guild):
     await refresh_panel(guild)
     await refresh_slotlists(guild)
+
+# CHANGE 6 ── push overall summary to the summary channel
+async def refresh_summary(guild):
+    gd = G(guild.id)
+    sid = gd.get("summary_channel")
+    if not sid:
+        return
+    ch = guild.get_channel(sid)
+    if not ch:
+        return
+    total = len(gd["teams"])
+    lines_a, lines_b = [], []
+    for t in gd["teams"]:
+        member = guild.get_member(t["owner"])
+        tag = str(member) if member else f"<@{t['owner']}>"
+        line = f"`{t['id']:02d}` **{t['name']}** — {tag}"
+        if t["window"] == "A":
+            lines_a.append(line)
+        else:
+            lines_b.append(line)
+    desc = (
+        f"**Total teams registered: {total}**\n\n"
+        f"**7-9 PM ({len(lines_a)} teams)**\n"
+        + ("\n".join(lines_a) if lines_a else "— none —")
+        + f"\n\n**9-11 PM ({len(lines_b)} teams)**\n"
+        + ("\n".join(lines_b) if lines_b else "— none —")
+    )
+    e = discord.Embed(title="📋 Overall Participation — Today", description=desc[:4000], color=0xFFC400)
+    e.set_footer(text=f"Date: {gd['date']} • Auto-updated on every registration")
+
+    # find existing summary message or post new one
+    mid = gd.get("summary_msg")
+    msg = None
+    if mid:
+        try:
+            msg = await ch.fetch_message(mid)
+        except discord.NotFound:
+            msg = None
+    if msg:
+        await msg.edit(embed=e)
+    else:
+        msg = await ch.send(embed=e)
+        gd["summary_msg"] = msg.id
+        save()
 
 async def ensure_roles(guild, gd):
     for key, w in WINDOWS.items():
@@ -574,12 +648,14 @@ async def remove_team(guild, gd, team, dm_text=None):
         gd["teams"].remove(team)
         save()
     member = guild.get_member(team["owner"])
-    role = guild.get_role(gd["roles"].get(team["window"], 0))
-    if member and role:
-        try:
-            await member.remove_roles(role)
-        except Exception:
-            pass
+    # Only strip the role if the player has no OTHER team in the same window
+    if not find_team(gd, team["owner"], team["window"]):
+        role = guild.get_role(gd["roles"].get(team["window"], 0))
+        if member and role:
+            try:
+                await member.remove_roles(role)
+            except Exception:
+                pass
     if dm_text and member:
         try:
             await member.send(dm_text)
@@ -588,7 +664,6 @@ async def remove_team(guild, gd, team, dm_text=None):
 
 # ---------- daily automatic registration panel ----------
 async def post_daily_panel(guild):
-    """Clears yesterday's registrations and posts a fresh registration panel (no command needed)."""
     gd = G(guild.id)
     if not gd.get("channel"):
         return
@@ -599,11 +674,12 @@ async def post_daily_panel(guild):
         except Exception:
             return
     today = datetime.now(IST).strftime("%Y-%m-%d")
-
     for t in list(gd["teams"]):
         await remove_team(guild, gd, t)
     fresh_groups(gd, today)
     gd["open"] = True
+    gd.setdefault("summary_msg", None)
+    gd["summary_msg"] = None
 
     if gd.get("message"):
         try:
@@ -615,12 +691,11 @@ async def post_daily_panel(guild):
     gd["message"] = msg.id
     save()
     await refresh_slotlists(guild)
+    await refresh_summary(guild)
 
-# ---------- scrim ban logic ----------
+# ---------- scrim ban ----------
 async def lock_banned(guild, gd, role):
-    """Deny the banned role from messaging in all scrim channels."""
     targets = [guild.get_channel(c) for c in gd.get("setup_channels", [])]
-    targets.append(guild.get_channel(gd.get("category") or 0))
     for ch in targets:
         if ch is None:
             continue
@@ -642,21 +717,17 @@ async def get_banned_role(guild, gd):
     return role
 
 async def apply_ban(guild, user, key, by):
-    """Scrim ban (NOT a server ban). Returns (ban_dict, dm_ok)."""
     gd = G(guild.id)
     label, secs = DURATIONS[key]
     until = None if secs is None else int(time.time()) + secs
     reason = "IDP Leak" if key == "leak" else "Scrim rule violation"
     ban = {"until": until, "reason": reason, "by": by.id, "at": int(time.time())}
     gd["bans"][str(user.id)] = ban
-
-    team = find_team(gd, user.id)
-    if team:
-        await remove_team(guild, gd, team)
-
+    for t in list(gd["teams"]):
+        if t["owner"] == user.id:
+            await remove_team(guild, gd, t)
     member = guild.get_member(user.id)
     if member:
-        # strip any IDP role (this also removes access to the IDP channel)
         for rid in gd["roles"].values():
             r = guild.get_role(rid)
             if r and r in member.roles:
@@ -671,6 +742,7 @@ async def apply_ban(guild, user, key, by):
             print("ban role failed:", e)
     save()
     await refresh_all(guild)
+    await refresh_summary(guild)
 
     dm_ok = True
     e = discord.Embed(title="🔨 You have been SCRIM BANNED", color=0xE74C3C,
@@ -703,20 +775,15 @@ async def lift_ban(guild, gd, user_id, dm=True, reason_text="Your scrim ban has 
             pass
 
 # ---------- registration UI ----------
+# CHANGE 3 ── Short DM after registration
 async def dm_confirmation(guild, user, team, g, slot):
-    e = discord.Embed(title="✅ Registration Confirmed", color=0x2ECC71,
-                      description=f"Your team is locked in for **{guild.name}**.")
-    e.add_field(name="🏷️ Team", value=f"#{team['id']:02d} • **{team['name']}**", inline=False)
-    e.add_field(name="🎯 Group / Slot", value=f"Group {g['id']:02d} • Slot {slot:02d}", inline=True)
-    e.add_field(name="📅 Date", value=g["date"], inline=True)
-    e.add_field(name="🕐 Window", value=WINDOWS[g["window"]]["label"], inline=True)
-    e.add_field(name="🕒 IDP", value=idp_text(g["window"]), inline=False)
-    e.add_field(name="📌 Reminders", value=(
-        f"• Your IDP channel is now visible to you in the server.\n"
-        f"• Can't play? Clear registration at least {LOCK_MINUTES} min before M1.\n"
-        "• Submit SS after the second match.\n"
-        "• Press **Set Slot Reminder** on the panel to get a DM 15 min before M1."), inline=False)
-    e.set_footer(text="Good luck! 👑")
+    w = WINDOWS[g["window"]]
+    e = discord.Embed(title="✅ Registered!", color=0x2ECC71)
+    e.add_field(name="Team", value=f"#{team['id']:02d} · **{team['name']}**", inline=True)
+    e.add_field(name="Group / Slot", value=f"Group {g['id']:02d} · Slot {slot:02d}", inline=True)
+    e.add_field(name="Window", value=w["label"], inline=True)
+    e.add_field(name="IDP Times", value=idp_text(g["window"]), inline=False)
+    e.set_footer(text=f"Date: {g['date']} • Clear 20 min before M1 if you can't play. GL! 👑")
     try:
         await user.send(embed=e)
         return True
@@ -738,8 +805,13 @@ class TeamModal(discord.ui.Modal, title="Register Team"):
         b = get_active_ban(gd, interaction.user.id)
         if b:
             return await interaction.response.send_message(f"🔨 {ban_text(b)}", ephemeral=True)
-        if find_team(gd, interaction.user.id):
-            return await interaction.response.send_message("❌ You already registered a team. Clear it first.", ephemeral=True)
+
+        # CHANGE 1 ── only block if the same window already has a team for this user
+        if find_team(gd, interaction.user.id, self.key):
+            return await interaction.response.send_message(
+                f"❌ You already have a team in the **{WINDOWS[self.key]['label']}** slot. "
+                "You can register for the other time window.", ephemeral=True)
+
         if any(t["name"].lower() == team_name.lower() for t in gd["teams"]):
             return await interaction.response.send_message("❌ That team name is already taken.", ephemeral=True)
 
@@ -750,12 +822,11 @@ class TeamModal(discord.ui.Modal, title="Register Team"):
                 "window": self.key, "group": g["id"], "remind": False, "reminded": False}
         gd["teams"].append(team)
         count = gcount(gd, g["id"])
-        slot_no = count + SLOT_START - 1          # slot numbers start from 03
-        if count >= GROUP_CAP:                    # group just filled -> open the next one
+        slot_no = count + SLOT_START - 1
+        if count >= GROUP_CAP:
             new_group(gd, self.key)
         save()
 
-        # --- IDP role assignment (gives access to the IDP channel) ---
         role_note = "—"
         try:
             await ensure_roles(interaction.guild, gd)
@@ -764,25 +835,24 @@ class TeamModal(discord.ui.Modal, title="Register Team"):
                 role_note = role.mention
                 await interaction.user.add_roles(role, reason="Scrim registration")
         except discord.Forbidden:
-            role_note = "⚠️ Could not assign. Ask admin to move the bot role ABOVE the IDP roles."
+            role_note = "⚠️ Missing perms — move bot role above IDP roles."
         except Exception as ex:
             role_note = f"⚠️ Role error: {ex}"
 
-        # --- DM the registered player ---
         dm_ok = await dm_confirmation(interaction.guild, interaction.user, team, g, slot_no)
 
-        e = discord.Embed(title="🏆 REGISTRATION — Team Confirmed", color=0x2ECC71)
-        e.description = f"📝 {tid:02d} : **{team_name}**\n👑 Owner - {interaction.user.mention}"
-        e.add_field(name="🎯 Group", value=f"Group {g['id']:02d} — {g['date']}\nSlot {slot_no:02d} • {WINDOWS[self.key]['label']}", inline=False)
-        e.add_field(name="🕒 IDP", value=idp_text(self.key), inline=False)
-        e.add_field(name="🔑 IDP Role", value=role_note, inline=False)
+        e = discord.Embed(title="🏆 Team Confirmed", color=0x2ECC71)
+        e.description = f"📝 `{tid:02d}` : **{team_name}**\n👑 {interaction.user.mention}"
+        e.add_field(name="Group / Slot", value=f"Group {g['id']:02d} — Slot {slot_no:02d} • {WINDOWS[self.key]['label']}", inline=False)
+        e.add_field(name="IDP Times", value=idp_text(self.key), inline=False)
+        e.add_field(name="IDP Role", value=role_note, inline=True)
         idp_id = gd.get("idp_channels", {}).get(self.key)
         if idp_id:
-            e.add_field(name="📡 IDP Channel", value=f"<#{idp_id}>", inline=False)
-        e.add_field(name="📩 DM", value="Sent ✅" if dm_ok else "⚠️ Couldn't DM you — please open your DMs.", inline=False)
-        e.set_footer(text="REGISTRATION")
+            e.add_field(name="IDP Channel", value=f"<#{idp_id}>", inline=True)
+        e.add_field(name="DM", value="Sent ✅" if dm_ok else "⚠️ Open your DMs.", inline=True)
         await interaction.response.send_message(content=interaction.user.mention, embed=e)
         await refresh_all(interaction.guild)
+        await refresh_summary(interaction.guild)
 
 class WindowSelect(discord.ui.Select):
     def __init__(self, gd):
@@ -818,6 +888,7 @@ class RemoveModal(discord.ui.Modal, title="Remove Team"):
                           dm_text=f"🗑️ Your team **{t['name']}** was removed from the scrim by staff.")
         await interaction.followup.send(f"✅ Removed **{t['name']}**.", ephemeral=True)
         await refresh_all(interaction.guild)
+        await refresh_summary(interaction.guild)
 
 # ---------- ban panel ----------
 class BanView(discord.ui.View):
@@ -833,7 +904,7 @@ class BanView(discord.ui.View):
         who = self.target.mention if self.target else "*not selected*"
         what = DURATIONS[self.key][0] if self.key else "*not selected*"
         return (f"🔨 **Scrim Punishment Panel**\n👤 Player: {who}\n⏱️ Punishment: {what}\n\n"
-                "Pick both, then press **PUNISH**. *(Scrim ban only — not a server ban.)*")
+                "Pick both, then press **PUNISH**.")
 
     async def interaction_check(self, interaction: discord.Interaction):
         if interaction.user.id != self.author_id or not is_throne(interaction.user):
@@ -875,7 +946,6 @@ class BanView(discord.ui.View):
                     else f"<t:{ban['until']}:f> (<t:{ban['until']}:R>)", inline=False)
         e.add_field(name="By", value=interaction.user.mention, inline=True)
         e.add_field(name="DM", value="Sent ✅" if dm_ok else "⚠️ Closed DMs", inline=True)
-        e.set_footer(text="Team removed • IDP role removed • IDP channel access removed")
         await interaction.edit_original_response(content=None, embed=e, view=None)
         self.stop()
 
@@ -923,6 +993,7 @@ class ManageView(discord.ui.View):
         fresh_groups(gd, gd["date"])
         save()
         await refresh_all(interaction.guild)
+        await refresh_summary(interaction.guild)
         await interaction.followup.send("♻️ All registrations cleared.", ephemeral=True)
 
 class RegisterView(discord.ui.View):
@@ -937,41 +1008,45 @@ class RegisterView(discord.ui.View):
         b = get_active_ban(gd, interaction.user.id)
         if b:
             return await interaction.response.send_message(f"🔨 {ban_text(b)}", ephemeral=True)
-        if find_team(gd, interaction.user.id):
-            return await interaction.response.send_message("❌ You already registered a team.", ephemeral=True)
         await interaction.response.send_message("Select your time window:", view=WindowView(gd), ephemeral=True)
 
     @discord.ui.button(label="Set Slot Reminder", style=discord.ButtonStyle.primary, emoji="⏰", custom_id="reg:remind")
     async def remind(self, interaction, button):
         gd = G(interaction.guild.id)
-        t = find_team(gd, interaction.user.id)
-        if not t:
+        teams = [t for t in gd["teams"] if t["owner"] == interaction.user.id]
+        if not teams:
             return await interaction.response.send_message("❌ Register a team first.", ephemeral=True)
-        t["remind"] = True
-        t["reminded"] = False
+        for t in teams:
+            t["remind"] = True
+            t["reminded"] = False
         save()
-        await interaction.response.send_message("⏰ I'll DM you 15 minutes before M1 IDP. Keep your DMs open!", ephemeral=True)
+        await interaction.response.send_message("⏰ I'll DM you 15 minutes before M1 IDP for all your slots. Keep your DMs open!", ephemeral=True)
 
     @discord.ui.button(label="Clear Registration", style=discord.ButtonStyle.danger, emoji="🗑️", custom_id="reg:clear")
     async def clear(self, interaction, button):
         gd = G(interaction.guild.id)
-        t = find_team(gd, interaction.user.id)
-        if not t:
+        teams = [t for t in gd["teams"] if t["owner"] == interaction.user.id]
+        if not teams:
             return await interaction.response.send_message("❌ You have no registration.", ephemeral=True)
-        g = get_group(gd, t["group"])
-        if g and datetime.now(IST) >= m1_dt(g) - timedelta(minutes=LOCK_MINUTES):
+        # check lock for each slot
+        locked = []
+        for t in teams:
+            g = get_group(gd, t["group"])
+            if g and datetime.now(IST) >= m1_dt(g) - timedelta(minutes=LOCK_MINUTES):
+                locked.append(WINDOWS[t["window"]]["label"])
+        if locked:
             return await interaction.response.send_message(
-                f"❌ Too late. You can only clear at least {LOCK_MINUTES} minutes before M1 IDP. Contact a moderator.",
-                ephemeral=True)
-        await remove_team(interaction.guild, gd, t)
-        await interaction.response.send_message(f"✅ **{t['name']}** removed.", ephemeral=True)
+                f"❌ Too close to M1 for: **{', '.join(locked)}**. Contact a moderator.", ephemeral=True)
+        for t in list(teams):
+            await remove_team(interaction.guild, gd, t)
+        await interaction.response.send_message("✅ All your registrations have been cleared.", ephemeral=True)
         await refresh_all(interaction.guild)
+        await refresh_summary(interaction.guild)
 
     @discord.ui.button(label="Manage", style=discord.ButtonStyle.secondary, emoji="🛠️", custom_id="reg:manage")
     async def manage(self, interaction, button):
         if not is_throne(interaction.user):
-            return await interaction.response.send_message(
-                "❌ Only the bot owner can open this.", ephemeral=True)
+            return await interaction.response.send_message("❌ Only the bot owner can open this.", ephemeral=True)
         await interaction.response.send_message("🛠️ **Manage Panel**", view=ManageView(), ephemeral=True)
 
 # ---------- tickets ----------
@@ -1023,7 +1098,7 @@ class TicketSelect(discord.ui.Select):
         await ch.send(interaction.user.mention, embed=e, view=CloseView())
         await interaction.response.send_message(f"✅ Ticket created: {ch.mention}", ephemeral=True)
         try:
-            await interaction.message.edit(view=TicketView())  # reset dropdown
+            await interaction.message.edit(view=TicketView())
         except Exception:
             pass
 
@@ -1032,170 +1107,135 @@ class TicketView(discord.ui.View):
         super().__init__(timeout=None)
         self.add_item(TicketSelect())
 
-# ---------- setup helpers ----------
-async def say(ctx, fallback, *args, **kw):
-    """Send to the command channel; if it was deleted by setup, use the fallback channel."""
-    try:
-        return await ctx.send(*args, **kw)
-    except (discord.NotFound, discord.Forbidden):
-        if fallback:
-            return await fallback.send(*args, **kw)
+# ---------- !setup (CHANGE 4 — no channel/category creation; asks for channel IDs) ----------
+class SetupModal(discord.ui.Modal, title="Scrim Setup — Channel IDs"):
+    reg_ch = discord.ui.TextInput(label="Registration Panel Channel ID", placeholder="Right-click channel → Copy ID")
+    idp_a  = discord.ui.TextInput(label="7-9 PM IDP Channel ID",         placeholder="Right-click channel → Copy ID")
+    idp_b  = discord.ui.TextInput(label="9-11 PM IDP Channel ID",        placeholder="Right-click channel → Copy ID")
+    sum_ch = discord.ui.TextInput(label="Summary / Stats Channel ID",    placeholder="Right-click channel → Copy ID")
+    date   = discord.ui.TextInput(label="Scrim Date (YYYY-MM-DD)",       placeholder="e.g. 2026-11-19", required=False)
 
-async def wipe_old(guild, gd):
-    """Delete the channels + roles created by the previous !setup (and old IDP/banned roles)."""
-    for cid in gd.get("setup_channels", []):
-        ch = guild.get_channel(cid)
-        if ch:
-            try:
-                await ch.delete(reason="Scrim setup: fresh start")
-            except Exception as e:
-                print("channel delete failed:", e)
-    cat = guild.get_channel(gd.get("category") or 0)
-    if cat:
+    async def on_submit(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        gd = G(guild.id)
+        await interaction.response.defer(ephemeral=True)
+
+        # Resolve date
+        date_str = self.date.value.strip() or default_date()
         try:
-            await cat.delete(reason="Scrim setup: fresh start")
-        except Exception as e:
-            print("category delete failed:", e)
+            datetime.strptime(date_str, "%Y-%m-%d")
+        except ValueError:
+            return await interaction.followup.send("❌ Invalid date format. Use YYYY-MM-DD.", ephemeral=True)
 
-    names = {w["role"] for w in WINDOWS.values()} | {BANNED_ROLE}
-    ids = set(gd.get("roles", {}).values()) | {gd.get("banned_role")}
-    for role in list(guild.roles):
-        if role.is_default() or role.managed:
-            continue
-        if role.id in ids or role.name in names:
+        # Resolve channel IDs
+        def _ch(raw):
             try:
-                await role.delete(reason="Scrim setup: fresh start")
-            except Exception as e:
-                print("role delete failed:", e)
+                return guild.get_channel(int(raw.strip())) or guild.get_channel(int(raw.strip().strip("<#>")))
+            except Exception:
+                return None
 
-    gd["roles"] = {}
-    gd["banned_role"] = None
-    gd["setup_channels"] = []
-    gd["category"] = None
-    gd["channel"] = None
-    gd["message"] = None
-    gd["slot_channel"] = None
-    gd["slot_msgs"] = {}
-    gd["idp_channels"] = {}
-    gd["idp_msgs"] = {}
-    save()
+        reg = _ch(self.reg_ch.value)
+        a_ch = _ch(self.idp_a.value)
+        b_ch = _ch(self.idp_b.value)
+        s_ch = _ch(self.sum_ch.value)
 
-# ---------- commands ----------
-@bot.command(name="setup")
-@commands.guild_only()
-@throne_only()
-async def setup_cmd(ctx, date: Optional[str] = None):
-    """!setup [YYYY-MM-DD] - delete old scrim channels/roles and build a fresh system"""
-    guild = ctx.guild
-    gd = G(guild.id)
-    date = date or default_date()
-    try:
-        datetime.strptime(date, "%Y-%m-%d")
-    except ValueError:
-        return await ctx.send("❌ Date format must be `YYYY-MM-DD`, e.g. `!setup 2026-11-19`", delete_after=8)
+        missing = []
+        if not reg: missing.append("Registration Panel")
+        if not a_ch: missing.append("7-9 PM IDP")
+        if not b_ch: missing.append("9-11 PM IDP")
+        if not s_ch: missing.append("Summary")
+        if missing:
+            return await interaction.followup.send(f"❌ Could not find channels: {', '.join(missing)}. Check the IDs.", ephemeral=True)
 
-    await ctx.send("⚙️ **Setting up a fresh scrim system...** Old scrim channels & roles are being deleted.",
-                   delete_after=20)
-    try:
-        await wipe_old(guild, gd)
+        # Persist channel IDs
+        gd["channel"] = reg.id
+        gd["idp_channels"] = {"A": a_ch.id, "B": b_ch.id}
+        gd["summary_channel"] = s_ch.id
+        gd["idp_msgs"] = {}
+        gd["summary_msg"] = None
 
-        # --- THRONE CLAIMER role (kept if it already exists) ---
+        # Throne role (create if missing)
         throne = guild.get_role(gd.get("throne_role") or 0) or discord.utils.get(guild.roles, name=THRONE_ROLE)
         if not throne:
             throne = await guild.create_role(name=THRONE_ROLE, colour=discord.Colour.gold(), hoist=True,
                                              mentionable=False, reason="Scrim bot admin role")
         gd["throne_role"] = throne.id
-        if throne not in ctx.author.roles:
+        if throne not in interaction.user.roles:
             try:
-                await ctx.author.add_roles(throne)
+                await interaction.user.add_roles(throne)
             except Exception:
                 pass
 
-        # --- fresh IDP roles + banned role ---
+        # IDP roles + banned role
         await ensure_roles(guild, gd)
-        banned = await guild.create_role(name=BANNED_ROLE, colour=discord.Colour.dark_red(),
-                                         reason="Scrim banned role")
-        gd["banned_role"] = banned.id
+        banned_role = guild.get_role(gd.get("banned_role") or 0) or discord.utils.get(guild.roles, name=BANNED_ROLE)
+        if not banned_role:
+            banned_role = await guild.create_role(name=BANNED_ROLE, colour=discord.Colour.dark_red(),
+                                                  reason="Scrim banned role")
+        gd["banned_role"] = banned_role.id
+        save()
 
-        # --- fresh channels ---
-        me = discord.PermissionOverwrite(view_channel=True, send_messages=True, embed_links=True,
-                                         attach_files=True, read_message_history=True, manage_messages=True)
-        ro = discord.PermissionOverwrite(view_channel=True, send_messages=False, add_reactions=False,
-                                         create_public_threads=False, create_private_threads=False,
-                                         send_messages_in_threads=False)
-        staff = discord.PermissionOverwrite(view_channel=True, send_messages=True)
-        cat = await guild.create_category(f"👑 {BRAND}", reason="Scrim setup")
-        reg = await guild.create_text_channel("📥┃registration", category=cat, reason="Scrim setup", overwrites={
-            guild.default_role: ro, guild.me: me, throne: staff})
-        slot = await guild.create_text_channel("📊┃slotlist", category=cat, reason="Scrim setup", overwrites={
-            guild.default_role: ro, guild.me: me, throne: staff})
-
-        # --- IDP channels: only registered teams (holders of that IDP role) can see them ---
-        idp_view = discord.PermissionOverwrite(view_channel=True, send_messages=False, add_reactions=False,
-                                               read_message_history=True, create_public_threads=False,
-                                               create_private_threads=False, send_messages_in_threads=False)
-        idp_chs = {}
-        for key, w in WINDOWS.items():
-            role = guild.get_role(gd["roles"][key])
-            ch = await guild.create_text_channel(
-                f"🔑┃{w['label'].replace(' PM', '')}-idp", category=cat, reason="Scrim setup",
-                overwrites={guild.default_role: discord.PermissionOverwrite(view_channel=False),
-                            role: idp_view, throne: staff, guild.me: me})
-            idp_chs[key] = ch
-            intro = discord.Embed(
-                title=f"🔑 IDP Room — {w['label']}",
-                description=("Only registered teams of this window can see this channel.\n"
-                             f"{idp_text(key)}\n\nRoom ID & password will be posted here by staff. "
-                             "**Never share IDP details outside this channel** — leaking = permanent scrim ban."),
-                color=0xFF6A00)
-            await ch.send(role.mention, embed=intro, allowed_mentions=discord.AllowedMentions.none())
-
-        gd["category"] = cat.id
-        gd["setup_channels"] = [reg.id, slot.id] + [c.id for c in idp_chs.values()]
-        gd["slot_channel"] = slot.id
-        gd["idp_channels"] = {k: c.id for k, c in idp_chs.items()}
-        await lock_banned(guild, gd, banned)
-
-        # re-apply still-active bans to members
-        for uid in list(gd["bans"]):
-            if get_active_ban(gd, uid):
-                m = guild.get_member(int(uid))
-                if m:
-                    try:
-                        await m.add_roles(banned)
-                    except Exception:
-                        pass
-
-        # --- fresh groups, panel, slotlists (public + IDP channels) ---
+        # Fresh groups + registration panel
         gd["open"] = True
-        fresh_groups(gd, date)
+        fresh_groups(gd, date_str)
+        if gd.get("message"):
+            try:
+                old = await reg.fetch_message(gd["message"])
+                await old.delete()
+            except Exception:
+                pass
         msg = await reg.send(embeds=build_embeds(gd), view=RegisterView())
-        gd["channel"] = reg.id
         gd["message"] = msg.id
         save()
-        await refresh_slotlists(guild)
 
-        e = discord.Embed(title="✅ Fresh scrim system ready", color=0x2ECC71)
-        e.add_field(name="Channels", value="\n".join(
-            [reg.mention, slot.mention] + [c.mention for c in idp_chs.values()]), inline=True)
-        e.add_field(name="Roles", value="\n".join(
-            [throne.mention, banned.mention] + [guild.get_role(r).mention for r in gd["roles"].values()]),
-            inline=True)
-        e.add_field(name="Date", value=date, inline=True)
-        e.add_field(name="Auto Panel", value="Registration panel auto-posts daily at **10:00 AM IST**", inline=False)
-        await say(ctx, reg, embed=e, delete_after=60)
-    except discord.Forbidden:
-        await say(ctx, None, "❌ I'm missing permissions. Give the bot **Manage Channels**, **Manage Roles**, "
-                              "**Attach Files**, and move the bot role to the TOP of the role list.")
-    except Exception as ex:
-        print("setup failed:", ex)
-        await say(ctx, None, f"❌ Setup failed: `{ex}`")
+        # CHANGE 4 ── bot sends the IDP announcement + pinned message automatically
+        for key, ch in [("A", a_ch), ("B", b_ch)]:
+            w = WINDOWS[key]
+            role = guild.get_role(gd["roles"].get(key, 0))
+            intro = discord.Embed(
+                title=f"🔑 IDP Room — {w['label']}",
+                description=(
+                    f"Only registered teams of this window can see this channel.\n"
+                    f"{idp_text(key)}\n\n"
+                    "Room ID & password will be posted here by staff. "
+                    "**Never share IDP details outside this channel** — leaking = permanent scrim ban."
+                ),
+                color=0xFF6A00 if key == "A" else 0x9B59B6,
+            )
+            intro.set_image(url=IDP_BANNER_URL)
+            allowed = discord.AllowedMentions(roles=bool(role), users=False, everyone=False)
+            content = role.mention if role else f"**{w['label']} GROUP**"
+            pin_msg = await ch.send(content=content, embed=intro, allowed_mentions=allowed)
+            try:
+                await pin_msg.pin()
+            except Exception:
+                pass
+
+        # Push initial slotlists and summary
+        await refresh_slotlists(guild)
+        await refresh_summary(guild)
+
+        e = discord.Embed(title="✅ Scrim system ready", color=0x2ECC71)
+        e.add_field(name="Registration Panel", value=reg.mention, inline=True)
+        e.add_field(name="7-9 PM IDP", value=a_ch.mention, inline=True)
+        e.add_field(name="9-11 PM IDP", value=b_ch.mention, inline=True)
+        e.add_field(name="Summary Channel", value=s_ch.mention, inline=True)
+        e.add_field(name="Date", value=date_str, inline=True)
+        e.add_field(name="Auto Panel", value="Posts daily at **10:00 AM IST**", inline=False)
+        await interaction.followup.send(embed=e, ephemeral=True)
+
+@bot.command(name="setup")
+@commands.guild_only()
+@throne_only()
+async def setup_cmd(ctx):
+    """!setup — open the channel-ID modal to wire up the scrim system (no channels created)."""
+    await ctx.message.delete()
+    await ctx.author.send_modal(SetupModal())
 
 @bot.command(name="ban")
 @commands.guild_only()
 @throne_only()
 async def ban_cmd(ctx, member: Optional[discord.Member] = None):
-    """!ban [@user] - open the scrim punishment panel"""
     view = BanView(ctx.author.id, member)
     await ctx.send(view.summary(), view=view)
 
@@ -1203,7 +1243,6 @@ async def ban_cmd(ctx, member: Optional[discord.Member] = None):
 @commands.guild_only()
 @throne_only()
 async def unban(ctx, user: discord.User):
-    """!unban @user - lift a scrim ban"""
     gd = G(ctx.guild.id)
     if str(user.id) not in gd["bans"]:
         return await ctx.send("❌ That user has no scrim ban.", delete_after=8)
@@ -1214,7 +1253,6 @@ async def unban(ctx, user: discord.User):
 @commands.guild_only()
 @throne_only()
 async def banlist(ctx):
-    """!banlist - show active scrim bans"""
     gd = G(ctx.guild.id)
     lines = []
     for uid in list(gd["bans"]):
@@ -1229,7 +1267,6 @@ async def banlist(ctx):
 @commands.guild_only()
 @throne_only()
 async def throne(ctx, member: discord.Member):
-    """!throne @user - give THRONE CLAIMER"""
     role = ctx.guild.get_role(G(ctx.guild.id).get("throne_role") or 0)
     if not role:
         return await ctx.send("❌ Run `!setup` first.")
@@ -1240,7 +1277,6 @@ async def throne(ctx, member: discord.Member):
 @commands.guild_only()
 @throne_only()
 async def unthrone(ctx, member: discord.Member):
-    """!unthrone @user - remove THRONE CLAIMER"""
     role = ctx.guild.get_role(G(ctx.guild.id).get("throne_role") or 0)
     if role and role in member.roles:
         await member.remove_roles(role)
@@ -1250,7 +1286,6 @@ async def unthrone(ctx, member: discord.Member):
 @commands.guild_only()
 @throne_only()
 async def ticketpanel(ctx):
-    """!ticketpanel - post the ticket dropdown"""
     e = discord.Embed(title="TICKET SUPPORT", color=0x2ECC71,
                       description="\n\n".join(f"{v[0]} **{v[1].upper()}**\n{v[2]}" for v in TICKET_TYPES.values()))
     await ctx.send(embed=e, view=TicketView())
@@ -1263,7 +1298,6 @@ def parse_duration(s):
 @commands.guild_only()
 @throne_only()
 async def giveaway(ctx, duration: str, winners: int, *, prize: str):
-    """!giveaway 2d 1 ROYAL PASS"""
     secs = parse_duration(duration)
     if not secs:
         return await ctx.send("Use a duration like `30m`, `2h`, `2d`.")
@@ -1281,7 +1315,6 @@ async def giveaway(ctx, duration: str, winners: int, *, prize: str):
 @commands.guild_only()
 @throne_only()
 async def reset(ctx, date: Optional[str] = None):
-    """!reset [YYYY-MM-DD] - clear all teams, remove their roles, restart groups"""
     gd = G(ctx.guild.id)
     if date:
         try:
@@ -1291,15 +1324,16 @@ async def reset(ctx, date: Optional[str] = None):
     for t in list(gd["teams"]):
         await remove_team(ctx.guild, gd, t)
     fresh_groups(gd, date or gd["date"])
+    gd["summary_msg"] = None
     save()
     await refresh_all(ctx.guild)
+    await refresh_summary(ctx.guild)
     await ctx.send("♻️ Registrations cleared.", delete_after=8)
 
 @bot.command()
 @commands.guild_only()
 @throne_only()
 async def fixroles(ctx):
-    """!fixroles - give IDP roles to all registered teams"""
     gd = G(ctx.guild.id)
     await ensure_roles(ctx.guild, gd)
     ok = bad = 0
@@ -1314,16 +1348,13 @@ async def fixroles(ctx):
             ok += 1
         except Exception:
             bad += 1
-    await ctx.send(f"✅ Roles given: {ok} | ❌ Failed: {bad}\n"
-                   "If failed, move the bot role above the IDP roles.")
+    await ctx.send(f"✅ Roles given: {ok} | ❌ Failed: {bad}")
 
 @bot.command(name="thanks")
 @commands.guild_only()
 @throne_only()
 async def thanks_cmd(ctx, *, note: Optional[str] = None):
-    """!thanks [extra message] - post a thank-you message"""
-    text = ("Thank you to all the teams for playing with us! 🔥\n\n"
-            "Play fair, be on time and keep grinding. 💛")
+    text = "Thank you to all the teams for playing with us! 🔥\n\nPlay fair, be on time and keep grinding. 💛"
     if note:
         text += f"\n\n💬 {note}"
     e = discord.Embed(title="🙏 THANK YOU TEAMS!", description=text[:4000], color=0xFFC400)
@@ -1335,20 +1366,17 @@ async def thanks_cmd(ctx, *, note: Optional[str] = None):
     await ctx.send(embed=e)
 
 async def send_group_map_announcement(guild, gd, key, date_str, destination=None, manual=False):
-    """Post the two-match map schedule for one group/window."""
     w = WINDOWS[key]
     channel_id = gd.get("idp_channels", {}).get(key)
     channel = destination or (guild.get_channel(channel_id) if channel_id else None)
     if channel is None:
         return False
 
-    groups = [g for g in gd.get("groups", [])
-              if g.get("window") == key and g.get("date") == date_str]
+    groups = [g for g in gd.get("groups", []) if g.get("window") == key and g.get("date") == date_str]
     group_text = ", ".join(f"{g['id']:02d}" for g in groups) if groups else "Not assigned"
     role = guild.get_role(gd.get("roles", {}).get(key, 0))
     role_text = role.mention if role else ""
     reveal_dt = m1_dt({"date": date_str, "window": key}) - timedelta(minutes=MAP_REVEAL_MINUTES_BEFORE)
-    reveal_ts = int(reveal_dt.timestamp())
 
     header = discord.Embed(
         title=f"🗺️ MAP SCHEDULE • {w['label']} GROUP",
@@ -1357,7 +1385,7 @@ async def send_group_map_announcement(guild, gd, key, date_str, destination=None
             f"**Date:** {date_str}\n"
             f"**Group(s):** {group_text}\n"
             f"**Map reveal:** {fmt_time(reveal_dt.hour, reveal_dt.minute)} IST\n"
-            f"**M1 IDP:** {fmt_time(*w['m1'])} IST  •  **M2 IDP:** {fmt_time(*w['m2'])} IST\n\n"
+            f"**M1:** {fmt_time(*w['m1'])} IST  •  **M2:** {fmt_time(*w['m2'])} IST  •  **M3:** {fmt_time(*w['m3'])} IST\n\n"
             "Be ready before your IDP time. Follow the announced match order."
         ), color=w["color"])
     header.set_footer(text=f"{BRAND} • Play fair • Be on time")
@@ -1365,7 +1393,7 @@ async def send_group_map_announcement(guild, gd, key, date_str, destination=None
     embeds, files = [header], []
     for n in (0, 1):
         map_name = map_for(date_str, key, n)
-        match_time = w["m1"] if n == 0 else w["m2"]
+        match_key = ["m1", "m2"][n]
         match_ts = int(match_dt(date_str, key, n).timestamp())
         image_buf = await asyncio.to_thread(make_map_cinematic_png, map_name, n, key, date_str)
         filename = f"{date_str}_{key.lower()}_m{n + 1}_{map_name.lower()}.png"
@@ -1374,7 +1402,7 @@ async def send_group_map_announcement(guild, gd, key, date_str, destination=None
             title=f"M{n + 1}  |  {map_name.upper()}",
             description=(
                 f"**{date_str} • {w['label']}**\n"
-                f"**IDP:** {fmt_time(*match_time)} IST\n"
+                f"**IDP:** {fmt_time(*w[match_key])} IST\n"
                 f"<t:{match_ts}:t> your time  •  <t:{match_ts}:R>"
             ), color=w["color"])
         embed.set_image(url=f"attachment://{filename}")
@@ -1385,15 +1413,11 @@ async def send_group_map_announcement(guild, gd, key, date_str, destination=None
     await channel.send(content=content, embeds=embeds, files=files, allowed_mentions=allowed)
     return True
 
-
 @bot.command(name="maps")
 @commands.guild_only()
 @throne_only()
 async def maps_cmd(ctx, group: Optional[str] = None, date: Optional[str] = None):
-    """!maps [A|B] [YYYY-MM-DD] - manually post one or both group map schedules."""
     gd = G(ctx.guild.id)
-
-    # Preserve the old usage: !maps YYYY-MM-DD
     if group and re.fullmatch(r"\d{4}-\d{2}-\d{2}", group):
         date, group = group, None
     date = date or gd["date"]
@@ -1401,22 +1425,17 @@ async def maps_cmd(ctx, group: Optional[str] = None, date: Optional[str] = None)
         datetime.strptime(date, "%Y-%m-%d")
     except ValueError:
         return await ctx.send("❌ Date format must be `YYYY-MM-DD`.", delete_after=8)
-
     keys = list(WINDOWS)
     if group:
         group = group.upper()
         if group not in WINDOWS:
             return await ctx.send("❌ Use `!maps A`, `!maps B`, or `!maps`.", delete_after=8)
         keys = [group]
-
     await ctx.send(f"🗺️ **MAP SCHEDULE REQUESTED** • {date}")
     posted = 0
     for key in keys:
         channel_id = gd.get("idp_channels", {}).get(key)
-        destination = ctx.guild.get_channel(channel_id) if channel_id else None
-        # If no IDP channel exists, keep manual use functional in the command channel.
-        if destination is None:
-            destination = ctx.channel
+        destination = ctx.guild.get_channel(channel_id) if channel_id else ctx.channel
         if await send_group_map_announcement(ctx.guild, gd, key, date, destination=destination, manual=True):
             posted += 1
     await ctx.send(f"✅ Posted {posted} group map schedule(s).")
@@ -1425,20 +1444,19 @@ async def maps_cmd(ctx, group: Optional[str] = None, date: Optional[str] = None)
 async def help_cmd(ctx):
     e = discord.Embed(title="👑 Commands", color=0x5865F2, description=(
         "*All admin commands are locked to the bot owner only.*\n\n"
-        f"`!setup [YYYY-MM-DD]` - delete old scrim channels/roles, build fresh {BRAND} system\n"
-        "`!ban [@user]` - scrim punishment panel (1 / 2 / 3 days or IDP leak permanent)\n"
-        "`!unban @user` - lift a scrim ban\n"
-        "`!banlist` - show active scrim bans\n"
-        f"`!throne @user` / `!unthrone @user` - give / remove {THRONE_ROLE}\n"
-        "`!giveaway 2d 1 ROYAL PASS` - start a giveaway\n"
-        "`!maps` - manually post both group map schedules\n"
-        "`!maps A` / `!maps B` - post one group's schedule\n"
-        "`!maps A 2026-11-19` - post a group's schedule for a date\n"
-        "`!thanks [message]` - post a thank-you message\n"
-        "`!ticketpanel` - post ticket dropdown\n"
-        "`!fixroles` - give IDP roles to registered teams\n"
-        "`!reset [YYYY-MM-DD]` - clear all registrations\n\n"
-        "🕙 The registration panel is posted automatically every day at **10:00 AM IST**."))
+        "`!setup` — open the channel-ID modal (no channels created by the bot)\n"
+        "`!ban [@user]` — scrim punishment panel\n"
+        "`!unban @user` — lift a scrim ban\n"
+        "`!banlist` — show active scrim bans\n"
+        f"`!throne @user` / `!unthrone @user` — give / remove {THRONE_ROLE}\n"
+        "`!giveaway 2d 1 ROYAL PASS` — start a giveaway\n"
+        "`!maps` — post both group map schedules\n"
+        "`!maps A` / `!maps B` — post one group's schedule\n"
+        "`!thanks [message]` — post a thank-you message\n"
+        "`!ticketpanel` — post ticket dropdown\n"
+        "`!fixroles` — give IDP roles to registered teams\n"
+        "`!reset [YYYY-MM-DD]` — clear all registrations\n\n"
+        "🕙 Registration panel posts automatically every day at **10:00 AM IST**."))
     await ctx.send(embed=e)
 
 @bot.event
@@ -1455,9 +1473,10 @@ async def on_command_error(ctx, error):
         print(error)
 
 # ---------- background loops ----------
+AUTO_PANEL_TIME = dtime(hour=10, minute=0, tzinfo=IST)
+
 @tasks.loop(time=AUTO_PANEL_TIME)
 async def daily_panel_loop():
-    """Every day at 10:00 AM IST: clear old registrations and post a fresh registration panel."""
     for gid in list(DATA["guilds"]):
         guild = bot.get_guild(int(gid))
         if not guild:
@@ -1469,19 +1488,17 @@ async def daily_panel_loop():
 
 @tasks.loop(seconds=20)
 async def map_announcement_loop():
-    """Post each group's maps 30 minutes before its own M1 IDP time."""
     now = datetime.now(IST)
     today = now.strftime("%Y-%m-%d")
     for gid, gd in list(DATA["guilds"].items()):
         guild = bot.get_guild(int(gid))
         if not guild or gd.get("date") != today:
             continue
-        for key, window in WINDOWS.items():
+        for key in WINDOWS:
             announcement_key = f"{today}:{key}"
             if gd.setdefault("map_announcements", {}).get(announcement_key):
                 continue
-            groups = [g for g in gd.get("groups", [])
-                      if g.get("window") == key and g.get("date") == today]
+            groups = [g for g in gd.get("groups", []) if g.get("window") == key and g.get("date") == today]
             if not groups:
                 continue
             reveal_at = m1_dt({"date": today, "window": key}) - timedelta(minutes=MAP_REVEAL_MINUTES_BEFORE)
@@ -1495,7 +1512,6 @@ async def map_announcement_loop():
                     save()
             except Exception as e:
                 print(f"map announcement failed for guild {gid}, group {key}:", e)
-
 
 @tasks.loop(seconds=20)
 async def giveaway_loop():
@@ -1535,14 +1551,14 @@ async def reminder_loop():
                 save()
                 try:
                     user = await bot.fetch_user(t["owner"])
-                    await user.send(f"⏰ **{t['name']}** — M1 IDP of Group {g['id']:02d} is at "
-                                    f"{fmt_time(*WINDOWS[g['window']]['m1'])} (in 15 minutes). Be ready!")
+                    await user.send(
+                        f"⏰ **{t['name']}** — M1 IDP of Group {g['id']:02d} ({WINDOWS[g['window']]['label']}) "
+                        f"is at {fmt_time(*WINDOWS[g['window']]['m1'])} (in ~15 min). Be ready!")
                 except Exception:
                     pass
 
 @tasks.loop(seconds=60)
 async def ban_loop():
-    """Automatically lifts expired scrim bans."""
     now = int(time.time())
     for gid, gd in list(DATA["guilds"].items()):
         expired = [uid for uid, b in gd.get("bans", {}).items()
@@ -1586,8 +1602,9 @@ async def on_ready():
 # ---------- start ----------
 if not TOKEN:
     raise SystemExit(
-        "No bot token found. Set DISCORD_TOKEN in your environment before running.\n"
-        'PowerShell:  $env:DISCORD_TOKEN = "YOUR_NEW_BOT_TOKEN"'
+        "No bot token found.\n"
+        "Set the DISCORD_TOKEN environment variable before running.\n"
+        'PowerShell:  $env:DISCORD_TOKEN = "YOUR_BOT_TOKEN"'
     )
 
 try:
@@ -1595,11 +1612,11 @@ try:
 except discord.LoginFailure:
     raise SystemExit(
         "Login failed: Discord rejected the token.\n"
-        "Go to discord.com/developers/applications -> your app -> Bot -> Reset Token,\n"
-        "then paste the NEW token (the Bot token, not the Client Secret)."
+        "Go to discord.com/developers/applications → your app → Bot → Reset Token,\n"
+        "then set the NEW token in DISCORD_TOKEN."
     )
 except discord.PrivilegedIntentsRequired:
     raise SystemExit(
         "Enable 'Message Content Intent' and 'Server Members Intent' in\n"
-        "Developer Portal -> your app -> Bot -> Privileged Gateway Intents."
+        "Developer Portal → your app → Bot → Privileged Gateway Intents."
     )
