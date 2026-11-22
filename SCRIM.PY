@@ -13,7 +13,7 @@ except ImportError:
     raise SystemExit("Pillow is missing. Run:  pip install pillow")
 
 # ================= SETTINGS =================
-TOKEN = os.getenv("MTU2NzYzOTY0OTQ5NTgxMDA3OA.GLIc3v.nf5GIyK3f2YagGm70NG_QXopdSiNgZSS_E34RY", "MTU2NzYzOTY0OTQ5NTgxMDA3OA.GLIc3v.nf5GIyK3f2YagGm70NG_QXopdSiNgZSS_E34RY").strip().strip('"').strip("'")
+TOKEN = os.getenv("MTU2NzYzOTY0OTQ5NTgxMDA3OA.GZgGLB.n4m2W--X5qndqeH4eLsqHkojsFLb9oUdiE2t1A", "MTU2NzYzOTY0OTQ5NTgxMDA3OA.GZgGLB.n4m2W--X5qndqeH4eLsqHkojsFLb9oUdiE2t1A").strip().strip('"').strip("'")
 
 PREFIX = "!"
 BRAND = "SUPREME SCRIMS"
@@ -34,7 +34,6 @@ WINDOWS = {
     "A": {
         "label": "7-9 PM",
         "role": "7-9 IDP",
-        # m1 / m2 / m3 as (hour, minute) in 24h
         "m1": (19, 22),
         "m2": (20, 2),
         "m3": (20, 42),
@@ -49,9 +48,6 @@ WINDOWS = {
         "color": 0x9B59B6,
     },
 }
-
-# CHANGE 1 ── Cross-registration: a player may hold ONE slot per window (A and B).
-# find_team() now scoped to a specific window key so we don't block the second slot.
 
 DURATIONS = {
     "1d":   ("1 Day", 86400),
@@ -74,8 +70,6 @@ MAP_STYLE = {
                 "accent": (255, 130, 190), "tag": "CITY & MOUNTAIN CLASH"},
 }
 DATA_FILE = "data.json"
-
-# CHANGE 4 ── IDP banner image URL (sent automatically on !setup)
 IDP_BANNER_URL = "https://cdn.discordapp.com/attachments/1453442713193152684/1497823623099060284/IMG_20260426_100811.jpg"
 
 # ============================================
@@ -95,9 +89,9 @@ def save():
 
 def G(guild_id):
     gd = DATA["guilds"].setdefault(str(guild_id), {})
-    gd.setdefault("channel", None)          # registration panel channel id (entered by admin)
+    gd.setdefault("channel", None)          # registration panel channel id
     gd.setdefault("message", None)          # registration panel message id
-    gd.setdefault("idp_channels", {})       # window key -> IDP channel id (entered by admin)
+    gd.setdefault("idp_channels", {})       # window key -> IDP channel id
     gd.setdefault("idp_msgs", {})           # window key -> {group id -> message id}
     gd.setdefault("summary_channel", None)  # channel for overall stats / team data
     gd.setdefault("map_announcements", {})
@@ -149,7 +143,6 @@ def fresh_groups(gd, date):
     for key in WINDOWS:
         new_group(gd, key)
 
-# CHANGE 1 ── scoped to a specific window key so both A and B can be registered
 def find_team(gd, user_id, window_key=None):
     """Return the team the user owns in the given window (or any window if key=None)."""
     for t in gd["teams"]:
@@ -473,12 +466,11 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-# CHANGE 2 ── status set to offline (do_not_disturb renders as a red dot, invisible is truly offline)
 bot = commands.Bot(
     command_prefix=PREFIX,
     intents=intents,
     help_command=None,
-    status=discord.Status.invisible,   # bot shows as OFFLINE
+    status=discord.Status.invisible,
 )
 
 # ---------- panel ----------
@@ -537,7 +529,6 @@ async def refresh_panel(guild):
 _locks = {}
 
 async def _sync_idp_channel(ch, msgs, groups, images):
-    """Keep IDP channel slotlists in sync (no separate slotlist channel)."""
     live = {str(g["id"]) for g in groups}
     for gid in list(msgs):
         if gid not in live:
@@ -563,7 +554,6 @@ async def _sync_idp_channel(ch, msgs, groups, images):
             msg = await ch.send(content=content, file=file)
             msgs[str(g["id"])] = msg.id
 
-# CHANGE 5 ── slotlist goes into the IDP channel only (no separate slotlist channel)
 async def refresh_slotlists(guild):
     gd = G(guild.id)
     idp_chs = {k: guild.get_channel(v) for k, v in gd.get("idp_channels", {}).items() if v}
@@ -590,7 +580,6 @@ async def refresh_all(guild):
     await refresh_panel(guild)
     await refresh_slotlists(guild)
 
-# CHANGE 6 ── push overall summary to the summary channel
 async def refresh_summary(guild):
     gd = G(guild.id)
     sid = gd.get("summary_channel")
@@ -619,7 +608,6 @@ async def refresh_summary(guild):
     e = discord.Embed(title="📋 Overall Participation — Today", description=desc[:4000], color=0xFFC400)
     e.set_footer(text=f"Date: {gd['date']} • Auto-updated on every registration")
 
-    # find existing summary message or post new one
     mid = gd.get("summary_msg")
     msg = None
     if mid:
@@ -648,7 +636,6 @@ async def remove_team(guild, gd, team, dm_text=None):
         gd["teams"].remove(team)
         save()
     member = guild.get_member(team["owner"])
-    # Only strip the role if the player has no OTHER team in the same window
     if not find_team(gd, team["owner"], team["window"]):
         role = guild.get_role(gd["roles"].get(team["window"], 0))
         if member and role:
@@ -775,7 +762,6 @@ async def lift_ban(guild, gd, user_id, dm=True, reason_text="Your scrim ban has 
             pass
 
 # ---------- registration UI ----------
-# CHANGE 3 ── Short DM after registration
 async def dm_confirmation(guild, user, team, g, slot):
     w = WINDOWS[g["window"]]
     e = discord.Embed(title="✅ Registered!", color=0x2ECC71)
@@ -806,7 +792,6 @@ class TeamModal(discord.ui.Modal, title="Register Team"):
         if b:
             return await interaction.response.send_message(f"🔨 {ban_text(b)}", ephemeral=True)
 
-        # CHANGE 1 ── only block if the same window already has a team for this user
         if find_team(gd, interaction.user.id, self.key):
             return await interaction.response.send_message(
                 f"❌ You already have a team in the **{WINDOWS[self.key]['label']}** slot. "
@@ -1028,7 +1013,6 @@ class RegisterView(discord.ui.View):
         teams = [t for t in gd["teams"] if t["owner"] == interaction.user.id]
         if not teams:
             return await interaction.response.send_message("❌ You have no registration.", ephemeral=True)
-        # check lock for each slot
         locked = []
         for t in teams:
             g = get_group(gd, t["group"])
@@ -1107,54 +1091,54 @@ class TicketView(discord.ui.View):
         super().__init__(timeout=None)
         self.add_item(TicketSelect())
 
-# ---------- !setup (CHANGE 4 — no channel/category creation; asks for channel IDs) ----------
+# ---------- setup Modal & View ----------
 class SetupModal(discord.ui.Modal, title="Scrim Setup — Channel IDs"):
-    reg_ch = discord.ui.TextInput(label="Registration Panel Channel ID", placeholder="Right-click channel → Copy ID")
     idp_a  = discord.ui.TextInput(label="7-9 PM IDP Channel ID",         placeholder="Right-click channel → Copy ID")
     idp_b  = discord.ui.TextInput(label="9-11 PM IDP Channel ID",        placeholder="Right-click channel → Copy ID")
     sum_ch = discord.ui.TextInput(label="Summary / Stats Channel ID",    placeholder="Right-click channel → Copy ID")
     date   = discord.ui.TextInput(label="Scrim Date (YYYY-MM-DD)",       placeholder="e.g. 2026-11-19", required=False)
+
+    def __init__(self, reg_channel):
+        super().__init__()
+        self.reg_channel = reg_channel
 
     async def on_submit(self, interaction: discord.Interaction):
         guild = interaction.guild
         gd = G(guild.id)
         await interaction.response.defer(ephemeral=True)
 
-        # Resolve date
         date_str = self.date.value.strip() or default_date()
         try:
             datetime.strptime(date_str, "%Y-%m-%d")
         except ValueError:
             return await interaction.followup.send("❌ Invalid date format. Use YYYY-MM-DD.", ephemeral=True)
 
-        # Resolve channel IDs
         def _ch(raw):
             try:
                 return guild.get_channel(int(raw.strip())) or guild.get_channel(int(raw.strip().strip("<#>")))
             except Exception:
                 return None
 
-        reg = _ch(self.reg_ch.value)
+        reg = self.reg_channel
         a_ch = _ch(self.idp_a.value)
         b_ch = _ch(self.idp_b.value)
         s_ch = _ch(self.sum_ch.value)
 
         missing = []
-        if not reg: missing.append("Registration Panel")
-        if not a_ch: missing.append("7-9 PM IDP")
-        if not b_ch: missing.append("9-11 PM IDP")
-        if not s_ch: missing.append("Summary")
+        if not a_ch: missing.append("7-9 PM IDP Channel")
+        if not b_ch: missing.append("9-11 PM IDP Channel")
+        if not s_ch: missing.append("Summary Channel")
         if missing:
             return await interaction.followup.send(f"❌ Could not find channels: {', '.join(missing)}. Check the IDs.", ephemeral=True)
 
-        # Persist channel IDs
+        # Persist channel IDs (using current channel for registration panel)
         gd["channel"] = reg.id
         gd["idp_channels"] = {"A": a_ch.id, "B": b_ch.id}
         gd["summary_channel"] = s_ch.id
         gd["idp_msgs"] = {}
         gd["summary_msg"] = None
 
-        # Throne role (create if missing)
+        # Throne role
         throne = guild.get_role(gd.get("throne_role") or 0) or discord.utils.get(guild.roles, name=THRONE_ROLE)
         if not throne:
             throne = await guild.create_role(name=THRONE_ROLE, colour=discord.Colour.gold(), hoist=True,
@@ -1175,7 +1159,7 @@ class SetupModal(discord.ui.Modal, title="Scrim Setup — Channel IDs"):
         gd["banned_role"] = banned_role.id
         save()
 
-        # Fresh groups + registration panel
+        # Fresh groups + post registration panel in THIS channel
         gd["open"] = True
         fresh_groups(gd, date_str)
         if gd.get("message"):
@@ -1184,11 +1168,12 @@ class SetupModal(discord.ui.Modal, title="Scrim Setup — Channel IDs"):
                 await old.delete()
             except Exception:
                 pass
+
         msg = await reg.send(embeds=build_embeds(gd), view=RegisterView())
         gd["message"] = msg.id
         save()
 
-        # CHANGE 4 ── bot sends the IDP announcement + pinned message automatically
+        # Post IDP announcements
         for key, ch in [("A", a_ch), ("B", b_ch)]:
             w = WINDOWS[key]
             role = guild.get_role(gd["roles"].get(key, 0))
@@ -1224,13 +1209,39 @@ class SetupModal(discord.ui.Modal, title="Scrim Setup — Channel IDs"):
         e.add_field(name="Auto Panel", value="Posts daily at **10:00 AM IST**", inline=False)
         await interaction.followup.send(embed=e, ephemeral=True)
 
+class StartSetupView(discord.ui.View):
+    def __init__(self, author_id):
+        super().__init__(timeout=180)
+        self.author_id = author_id
+
+    @discord.ui.button(label="⚙️ Configure Scrim Setup", style=discord.ButtonStyle.primary, custom_id="setup:start")
+    async def start_setup(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id and not is_throne(interaction.user):
+            return await interaction.response.send_message("❌ Only THRONE CLAIMER can configure setup.", ephemeral=True)
+        await interaction.response.send_modal(SetupModal(interaction.channel))
+        try:
+            await interaction.message.delete()
+        except Exception:
+            pass
+
 @bot.command(name="setup")
 @commands.guild_only()
 @throne_only()
 async def setup_cmd(ctx):
-    """!setup — open the channel-ID modal to wire up the scrim system (no channels created)."""
-    await ctx.message.delete()
-    await ctx.author.send_modal(SetupModal())
+    """!setup — initiate scrim setup for the current channel."""
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+    e = discord.Embed(
+        title="⚙️ Scrim Setup",
+        description=(
+            f"This channel ({ctx.channel.mention}) will automatically be set as the **Registration Panel Channel**.\n\n"
+            "Click the button below to enter the IDP and Summary Channel IDs."
+        ),
+        color=0xFF6A00
+    )
+    await ctx.send(embed=e, view=StartSetupView(ctx.author.id))
 
 @bot.command(name="ban")
 @commands.guild_only()
@@ -1444,7 +1455,7 @@ async def maps_cmd(ctx, group: Optional[str] = None, date: Optional[str] = None)
 async def help_cmd(ctx):
     e = discord.Embed(title="👑 Commands", color=0x5865F2, description=(
         "*All admin commands are locked to the bot owner only.*\n\n"
-        "`!setup` — open the channel-ID modal (no channels created by the bot)\n"
+        "`!setup` — open setup dialog in the current channel\n"
         "`!ban [@user]` — scrim punishment panel\n"
         "`!unban @user` — lift a scrim ban\n"
         "`!banlist` — show active scrim bans\n"
