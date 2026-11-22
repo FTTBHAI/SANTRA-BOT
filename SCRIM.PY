@@ -13,7 +13,7 @@ except ImportError:
     raise SystemExit("Pillow is missing. Run:  pip install pillow")
 
 # ================= SETTINGS =================
-TOKEN = os.getenv("MTU2NzYzOTY0OTQ5NTgxMDA3OA.GZgGLB.n4m2W--X5qndqeH4eLsqHkojsFLb9oUdiE2t1A", "MTU2NzYzOTY0OTQ5NTgxMDA3OA.GZgGLB.n4m2W--X5qndqeH4eLsqHkojsFLb9oUdiE2t1A").strip().strip('"').strip("'")
+TOKEN = os.getenv("MTU2NzYzOTY0OTQ5NTgxMDA3OA.GUfzPS.r2GdKC3pJS1yglMxS2KizGVbgd_lKBG99ZnkT8", "MTU2NzYzOTY0OTQ5NTgxMDA3OA.GUfzPS.r2GdKC3pJS1yglMxS2KizGVbgd_lKBG99ZnkT8").strip().strip('"').strip("'")
 
 PREFIX = "!"
 BRAND = "SUPREME SCRIMS"
